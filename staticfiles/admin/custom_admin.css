@@ -1,0 +1,120 @@
+/* ============================================
+   GLOBAL – let admin auto-size columns
+   ============================================ */
+#result_list {
+    table-layout: auto !important;
+}
+
+
+/* ============================================
+   PARTY
+   ============================================ */
+th.column-party_id,
+td.field-party_id {
+    white-space: nowrap !important;
+    width: 50px !important;
+    min-width: 70px !important;
+}
+
+
+/* ============================================
+   APPLICATIONS TABLE
+   ============================================ */
+
+th.column-plan,
+td.field-plan {
+    white-space: nowrap;
+    min-width: 60px;
+}
+
+th.column-contact_name,
+td.field-contact_name {
+    white-space: nowrap;
+    min-width: 120px;
+}
+
+
+/* ============================================
+   ENROLMENT TABLE
+   ============================================ */
+
+/* Member ID - Name column */
+th.column-member_id_clickable,
+td.field-member_id_clickable,
+td.field-member_id_clickable a {
+    white-space: nowrap !important;
+    min-width: 150px;
+}
+
+/* Plan ID - Name column */
+th.column-plan_id_and_name,
+td.field-plan_id_and_name,
+td.field-plan_id_and_name a {
+    white-space: nowrap !important;
+    min-width: 150px;
+}
+
+
+/* ============================================
+   ENROLMENTS
+   ============================================ */
+th.column-party_id_clickable,
+td.field-party_id_clickable,
+td.field-party_id_clickable a {
+    white-space: nowrap !important;
+    min-width: 180px !important; 
+}
+
+
+/* ============================================
+   PLAN TABLE
+   ============================================ */
+
+/* Plan Name column */
+th.column-name,
+td.field-name,
+td.field-name a {
+    white-space: nowrap !important;
+    min-width: 230px;
+}
+
+/* Category column (society_status) */
+th.column-society_status,
+td.field-society_status {
+    white-space: nowrap !important;
+    min-width: 100px;
+}
+
+
+/* ============================================
+   NOMINATED REP + AUTHORISED SIGNATORY TABLES
+   ============================================ */
+
+/* both admins use organisation_clickable */
+th.column-organisation_clickable,
+td.field-organisation_clickable,
+td.field-organisation_clickable a {
+    white-space: nowrap !important;
+    min-width: 200px;
+}
+
+
+/* ============================================
+   DECLARATIONS
+   ============================================ */
+
+th.column-membership_link,
+td.field-membership_link,
+td.field-membership_link a {
+    white-space: nowrap !important;
+    min-width: 120px !important;
+    
+}
+
+th.column-enrolment_link,
+td.field-enrolment_link,
+td.field-enrolment_link a {
+    white-space: nowrap !important;
+    min-width: 110px !important; 
+}
+
