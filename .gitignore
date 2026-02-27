@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.log
+
+# Virtual environment
+venv/
+.venv/
+
+# Django
+staticfiles/
+media/
+db.sqlite3
+
+# Build artifacts
+*.zip
+
+# macOS
+.DS_Store
