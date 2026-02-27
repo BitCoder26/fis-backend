@@ -18,8 +18,12 @@ APP_VERSION = "staging-2026-02-27"
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / ".env")
-
+# Only load .env for local development.
+# On Elastic Beanstalk, environment variables are set in the EB console.
+dotenv_path = BASE_DIR / ".env.local"
+if dotenv_path.exists():
+    load_dotenv(dotenv_path)
+    
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -27,13 +31,14 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DJANGO_DEBUG", "True") == "True"
+DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
 ALLOWED_HOSTS = [
     "fis-backend-test-env.eba-phyvw229.eu-west-2.elasticbeanstalk.com",
     ".elasticbeanstalk.com",
     "localhost",
     "127.0.0.1",
+    "16.60.141.244",
 ]
 # Application definition
 
@@ -144,7 +149,7 @@ if not DEBUG:
     CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if os.getenv("CSRF_TRUSTED_ORIGINS") else []
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = False
 
 SUBMIT_API_KEY = os.getenv("SUBMIT_API_KEY", "dev-key")
 
