@@ -260,9 +260,9 @@ def submit_application(request):
                 send_application_submitted_email(
                     to_email=to_email,
                     plan_name=getattr(plan, "name", None) or str(plan),
-                    enrolment_code=membership.enrolment_code or str(membership.enrolment_id),
+                    enrolment_code=membership.enrolment_code,
+                    plan_code=f"{plan.class_code}-{plan.type_code}",
                 )
-                print("EMAIL FUNC FROM:", send_application_submitted_email.__module__)
         except Exception as e:
             print("Email sent failed:", e)
 

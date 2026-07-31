@@ -3,19 +3,29 @@ from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.shortcuts import redirect 
 from urllib.parse import urlencode 
-from .emails import send_application_submitted_email
+from .emails import send_application_submitted_email, submit_newsletter_opt_in
 from django.utils import timezone
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from .models import Application
 from .emails import send_membership_activated_email
-from .models import EnrolmentPayment
+from .models import Payment
 from django.db import transaction
+from django.contrib.auth import get_user_model
+from .admin import _to_bool
+from .enrolment_workflow import process_application, approve_enrolment, request_payment
+from .stripe_service import ensure_checkout_session
 import requests
 import stripe
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# Membership plans (m1 = individual annual, m2 = founder/individual lifetime):
+# when there is no conflict of interest, skip the "application received" and
+# "payment link" emails entirely and send the applicant straight to Stripe
+# checkout. They should get a single email once payment succeeds.
+DIRECT_CHECKOUT_PLANS = {"CM-IA", "CM-IL"}
 
 PLAN_TO_FORM = {
     # Community members (CM)
@@ -34,7 +44,19 @@ PLAN_TO_FORM = {
 }
 
 
-THANKS_BASE = "https://bitcoder26.github.io/website-food-investors-society/thank-you.html"
+def _submit_newsletter_opt_in(*, email: str, consent_marketing) -> bool:
+    if not email or _to_bool(consent_marketing) is not True:
+        return False
+
+    try:
+        submit_newsletter_opt_in(email=email)
+    except Exception as e:
+        # Newsletter signup is best-effort and must never fail enrolment.
+        print("Brevo newsletter opt-in failed:", e)
+        return False
+
+    return True
+
 
 @csrf_exempt
 def submit_enrolment(request):
@@ -45,7 +67,11 @@ def submit_enrolment(request):
     if request.method != "POST":
         return HttpResponse("Method not allowed", status=405)
     
-    token = request.POST.get("turnstile_token")
+    token = (
+        request.POST.get("turnstile_token")
+        or request.POST.get("cf-turnstile-response")
+        or request.POST.get("cf_turnstile_response")
+    )
     plan = request.POST.get("plan", "").strip()
 
     if not token:
@@ -71,6 +97,7 @@ def submit_enrolment(request):
         return HttpResponseBadRequest("Turnstile verification returned invalid JSON.")
 
     if not result.get("success"):
+        print("Turnstile verification failed:", result)
         return HttpResponseBadRequest("Turnstile verification failed.")
 
     # Save submission
@@ -83,12 +110,8 @@ def submit_enrolment(request):
     flat = {k: (v[0] if isinstance(v, list) else v) for k, v in raw.items()}
     flat = {k.replace("-", "_"): v for k, v in flat.items()}
     logo = request.FILES.get("logo_file")
-    to_email = (flat.get("email") or "").strip()  
+    to_email = (flat.get("email") or "").strip()
 
-    print("PLAN:", plan)
-    print("DATA KEYS:", list(flat.keys()))
-    print("FILES:", list(request.FILES.keys()))
-    
     app = Application.objects.create(
         plan=plan,
         data=flat,
@@ -99,13 +122,25 @@ def submit_enrolment(request):
         turnstile_error_codes=result.get("error-codes", []),
     )
 
-    # send "application received" email
-    if to_email and not app.application_submitted_email_sent_at:
+    _submit_newsletter_opt_in(
+        email=to_email,
+        consent_marketing=flat.get("consent_marketing"),
+    )
+
+    coi = (_to_bool(flat.get("conflict_of_interest")) is True)
+    direct_checkout = (plan.upper() in DIRECT_CHECKOUT_PLANS) and not coi
+
+    # Send the "application received" email FIRST — before the auto-approval
+    # workflow can send the activation / payment-link email — so the applicant
+    # sees the acknowledgement as the first message, then the outcome.
+    # m1/m2 applications with no conflict of interest skip straight to Stripe
+    # checkout instead, so they get no email until payment succeeds.
+    if to_email and not app.application_submitted_email_sent_at and not direct_checkout:
         try:
             send_application_submitted_email(
                 to_email=to_email,
-                plan_name=plan,          # or map to Plan.name later if you want
-                enrolment_code=str(app.application_id),  # optional: use Application ID as reference
+                plan_name=plan,                          # or map to Plan.name later if you want
+                plan_code=plan,
             )
             app.application_submitted_email_sent_at = timezone.now()
             app.save(update_fields=["application_submitted_email_sent_at"])
@@ -113,16 +148,65 @@ def submit_enrolment(request):
             # Don't break submission if email fails
             print("Application received email failed:", e)
 
+    checkout_payment_id = None
+
+    try:
+        with transaction.atomic():
+            if not coi:
+                # pick a system user for approved_by (best practice: create a dedicated one)
+                User = get_user_model()
+                system_user = (
+                    User.objects.filter(username="fis-system").first()
+                    or User.objects.filter(is_superuser=True).order_by("id").first()
+                )
+
+                if not system_user:
+                    print("fis-system user missing; skipping auto approve/payment")
+
+                else:
+                    enrolment = process_application(application_id=app.pk)
+                    if enrolment is not None:
+                        enrolment = approve_enrolment(enrolment=enrolment, approved_by=system_user)
+                        payment = request_payment(enrolment=enrolment, send_email=not direct_checkout)
+                        if direct_checkout and payment is not None:
+                            checkout_payment_id = payment.pk
+    except Exception as e:
+        print("Auto workflow failed:", e)
+        checkout_payment_id = None
+
+    if direct_checkout and checkout_payment_id:
+        try:
+            payment = ensure_checkout_session(Payment.objects.get(pk=checkout_payment_id))
+            if payment.checkout_url:
+                return redirect(payment.checkout_url)
+        except Exception as e:
+            print("Immediate checkout session creation failed:", e)
+
+    # Fallback for the direct-checkout path if anything above didn't produce a
+    # checkout redirect (e.g. system user missing, payment creation failed) —
+    # make sure the applicant still gets the acknowledgement email.
+    if direct_checkout and to_email and not app.application_submitted_email_sent_at:
+        try:
+            send_application_submitted_email(
+                to_email=to_email,
+                plan_name=plan,
+                plan_code=plan,
+            )
+            app.application_submitted_email_sent_at = timezone.now()
+            app.save(update_fields=["application_submitted_email_sent_at"])
+        except Exception as e:
+            print("Application received email failed (fallback):", e)
+
     form_slug = PLAN_TO_FORM.get(plan, "submission")
     qs = urlencode({"form": form_slug})
-    return redirect(f"{THANKS_BASE}?{qs}")
+    return redirect(f"{settings.THANKS_BASE}?{qs}")
 
 @csrf_exempt
 @require_POST
 def create_checkout(request, payment_id: int):
     try:
-        p = EnrolmentPayment.objects.select_related("enrolment").get(pk=payment_id)
-    except EnrolmentPayment.DoesNotExist:
+        p = Payment.objects.select_related("enrolment").get(pk=payment_id)
+    except Payment.DoesNotExist:
         return JsonResponse({"ok": False, "error": "payment not found"}, status=404)
 
     if not p.amount_pence or p.amount_pence <= 0:
@@ -206,7 +290,7 @@ def stripe_webhook(request):
 @transaction.atomic
 def _handle_checkout_completed(payment_id: str, session_obj: dict):
     p = (
-        EnrolmentPayment.objects
+        Payment.objects
         .select_for_update()
         .get(pk=int(payment_id))
     )

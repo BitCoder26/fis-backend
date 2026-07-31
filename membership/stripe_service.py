@@ -2,10 +2,10 @@ import stripe
 from django.conf import settings
 from django.utils import timezone
 
-from .models import EnrolmentPayment
+from .models import Payment
 
 
-def ensure_checkout_session(payment: EnrolmentPayment) -> EnrolmentPayment:
+def ensure_checkout_session(payment: Payment) -> Payment:
     """
     Creates a Stripe Checkout Session if the payment doesn't already have one.
     Updates payment fields: stripe_checkout_session_id, checkout_url, status, etc.
@@ -17,7 +17,7 @@ def ensure_checkout_session(payment: EnrolmentPayment) -> EnrolmentPayment:
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     # Refresh from DB so we don't work with stale state
-    payment = EnrolmentPayment.objects.select_related("enrolment", "enrolment__plan").get(pk=payment.pk)
+    payment = Payment.objects.select_related("enrolment", "enrolment__plan").get(pk=payment.pk)
 
     # Don't recreate if already has a link/session
     if payment.checkout_url and payment.stripe_checkout_session_id:

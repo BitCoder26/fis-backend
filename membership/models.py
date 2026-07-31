@@ -199,6 +199,30 @@ class Enrolment(models.Model):
             .first()
         )
 
+    def fee_payment_purpose(self) -> str:
+        """
+        Purpose label for non-share fee payments.
+        - NM-CF -> annual_fee
+        - donation plans -> donation
+        - all other fee-bearing plans -> membership_fee
+        """
+        plan = self.plan
+        if not plan:
+            return "membership_fee"
+
+        type_code = (getattr(plan, "type_code", "") or "").strip().upper()
+        if type_code == "CF":
+            return "annual_fee"
+
+        name = (getattr(plan, "name", "") or "").strip().lower()
+        if "donation" in name:
+            return "donation"
+
+        if type_code in {"DN", "DO"}:
+            return "donation"
+
+        return "membership_fee"
+
     def required_payment_purposes(self):
         required = []
 
@@ -209,7 +233,7 @@ class Enrolment(models.Model):
             fee_pence = int(round(float(self.plan.cost) * 100))
 
         if fee_pence > 0:
-            required.append("membership_fee")
+            required.append(self.fee_payment_purpose())
 
         if self.investment_amount_pence and self.investment_amount_pence > 0:
             required.append("share_capital")
@@ -235,7 +259,34 @@ class Enrolment(models.Model):
         ]
 
 
-class EnrolmentPayment(models.Model):
+def find_enrolment_by_email(email: str):
+    normalized_email = (email or "").strip().lower()
+    if not normalized_email:
+        return None
+
+    matches = (
+        Enrolment.objects
+        .select_related("party", "plan")
+        .filter(
+            Q(contact_email__iexact=normalized_email)
+            | Q(party__individual__email_address__iexact=normalized_email)
+            | Q(
+                party__organisation__nominated_reps__email_address__iexact=normalized_email,
+                party__organisation__nominated_reps__date_end__isnull=True,
+            )
+        )
+        .exclude(status__in=["rejected", "cancelled"])
+        .distinct()
+    )
+
+    active_match = matches.filter(status="active").order_by("-created_at").first()
+    if active_match:
+        return active_match
+
+    return matches.order_by("-created_at").first()
+
+
+class Payment(models.Model):
     STATUS = [
         ("requested", "requested"),
         ("pending", "pending"),
@@ -247,9 +298,13 @@ class EnrolmentPayment(models.Model):
     ]
     payment_id = models.BigAutoField(primary_key=True)
     enrolment = models.ForeignKey(Enrolment, on_delete=models.PROTECT, related_name="payments", blank=True, null=True)
+    donor_name = models.TextField(blank=True, null=True)
+    donor_email = models.EmailField(blank=True, null=True, db_index=True)
     status = models.CharField(max_length=40, choices=STATUS, default="requested", db_index=True)
     PURPOSES = [
         ("membership_fee", "membership_fee"),
+        ("annual_fee", "annual_fee"),
+        ("donation", "donation"),
         ("share_capital", "share_capital"),
         ("other", "other"),
         ("refund", "refund"),
@@ -281,14 +336,22 @@ class EnrolmentPayment(models.Model):
         return f"Payment {self.payment_id} — {amount_display}"
     
     class Meta:
-        verbose_name = "Enrolment Payment"
-        verbose_name_plural = "Enrolment Payments"
+        # Table is "membership_payment" — the default for this model after the
+        # RenameModel(EnrolmentPayment -> Payment) in migration 0025. (A stray
+        # db_table="membership_enrolmentpayment" override used to be here with no
+        # migration, which pointed the ORM at a non-existent table.)
+        verbose_name = "Payment"
+        verbose_name_plural = "Payments"
         indexes = [
             models.Index(fields=["status"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["enrolment", "status"]),
             models.Index(fields=["purpose", "status"]),
         ]
+
+
+# Backward-compatible alias while the codebase transitions to the generic name.
+EnrolmentPayment = Payment
 
 
 # --------------------------------------

@@ -7,8 +7,8 @@ from django.utils import timezone
 from datetime import timedelta
 from django.db import connection
 from datetime import date as date_cls
-from .models import EnrolmentPayment
-from .emails import send_payment_requested_email
+from .models import Payment
+from .emails import send_payment_requested_email, send_membership_activated_email
 from .stripe_service import ensure_checkout_session
 import json
 import os
@@ -18,7 +18,7 @@ from .models import (
     Individual,
     Organisation,
     Enrolment,
-    EnrolmentPayment,
+    Payment,
     Plan,
     Declaration,
     DeclarationForm,
@@ -292,6 +292,7 @@ def process_submissions(modeladmin, request, queryset):
                 class_code, type_code = _plan_codes(plan)
 
                 email = (d.get("email") or "").strip() if not is_org else (d.get("email") or "").strip()
+
 
                 agreed_fee = _agreed_fee_for_plan(plan, d)
                 enrolment = Enrolment.objects.create(
@@ -667,8 +668,47 @@ def create_payment_requests(modeladmin, request, queryset):
 
     created_count = 0
     skipped_count = 0
+    activated_free_count = 0
 
     for enrolment in queryset:
+        type_code = (getattr(enrolment.plan, "type_code", "") or "").strip().upper()
+        if type_code in {"SU", "VO"}:
+            changed_fields = []
+            if enrolment.status != "active":
+                enrolment.status = "active"
+                changed_fields.append("status")
+            if not enrolment.date_start:
+                enrolment.date_start = now.date()
+                changed_fields.append("date_start")
+            if changed_fields:
+                enrolment.save(update_fields=changed_fields)
+                activated_free_count += 1
+
+            if not enrolment.membership_activated_email_sent_at:
+                try:
+                    to_email = enrolment.get_contact_email()
+                    if to_email:
+                        marketing_consent = enrolment.declarations.filter(
+                            is_current=True
+                        ).values_list("data_marketing_consent", flat=True).first()
+                        send_membership_activated_email(
+                            to_email=to_email,
+                            enrolment_code=enrolment.enrolment_code or str(enrolment.enrolment_id),
+                            plan_name=enrolment.plan.name if enrolment.plan_id else None,
+                            marketing_consent=bool(marketing_consent),
+                        )
+                        enrolment.membership_activated_email_sent_at = timezone.now()
+                        enrolment.save(update_fields=["membership_activated_email_sent_at"])
+                except Exception as e:
+                    modeladmin.message_user(
+                        request,
+                        f"Free enrolment {enrolment.pk}: activation email failed: {e}",
+                        level=messages.ERROR,
+                    )
+
+            skipped_count += 1
+            continue
+
         # decide which payment to create (ONE only)
         payment = None
 
@@ -681,7 +721,7 @@ def create_payment_requests(modeladmin, request, queryset):
                 status__in=["requested", "pending", "succeeded"],
             ).exists()
             if not exists:
-                payment = EnrolmentPayment.objects.create(
+                payment = Payment.objects.create(
                     enrolment=enrolment,
                     purpose="share_capital",
                     status="requested",
@@ -698,19 +738,23 @@ def create_payment_requests(modeladmin, request, queryset):
 
         else:
             # membership fee payment (includes the £1 share automatically)
+            fee_purpose = enrolment.fee_payment_purpose()
             fee_pence = 0
             if enrolment.agreed_fee is not None:
-                fee_pence = _pounds_decimal_to_pence(enrolment.agreed_fee)
-            elif enrolment.plan and enrolment.plan.cost is not None:
+                agreed_pence = _pounds_decimal_to_pence(enrolment.agreed_fee)
+                if agreed_pence > 0:
+                    fee_pence = agreed_pence
+
+            if fee_pence <= 0 and enrolment.plan and enrolment.plan.cost is not None:
                 fee_pence = _pounds_decimal_to_pence(enrolment.plan.cost)
 
             if fee_pence <= 0:
                 skipped_count += 1
                 continue
 
-            payment = EnrolmentPayment.objects.create(
+            payment = Payment.objects.create(
                 enrolment=enrolment,
-                purpose="membership_fee",
+                purpose=fee_purpose,
                 status="requested",
                 amount_pence=fee_pence,
                 currency="GBP",
@@ -755,7 +799,7 @@ def create_payment_requests(modeladmin, request, queryset):
 
     modeladmin.message_user(
         request,
-        f"Created {created_count} payment request(s). Skipped {skipped_count}.",
+        f"Created {created_count} payment request(s). Activated {activated_free_count} free enrolment(s). Skipped {skipped_count}.",
         level=messages.SUCCESS if created_count else messages.WARNING,
     )
 
@@ -834,14 +878,14 @@ class EnrolmentAdmin(admin.ModelAdmin):
         return format_html('<a href="{}">{}</a>', url, label)
 
 
-@admin.register(EnrolmentPayment)
-class EnrolmentPaymentAdmin(admin.ModelAdmin):
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
     list_display = (
-        "payment_id", "enrolment", "purpose", "status", "amount_pence", "currency",
+        "payment_id", "enrolment", "donor_name", "donor_email", "purpose", "status", "amount_pence", "currency",
         "provider", "paid_at", "covers_start", "covers_end", "created_at",
     )
     list_filter = ("purpose", "status", "provider", "currency", "created_at")
-    search_fields = ("payment_id", "provider_ref", "enrolment__enrolment_code")
+    search_fields = ("payment_id", "provider_ref", "enrolment__enrolment_code", "donor_name", "donor_email")
     autocomplete_fields = ("enrolment",)
     ordering = ("-created_at",)
     actions = [mark_payments_succeeded_manual]

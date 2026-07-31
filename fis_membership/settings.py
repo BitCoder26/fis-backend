@@ -12,10 +12,10 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from urllib.parse import urlsplit
 
 APP_VERSION = "staging-2026-02-27"
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Only load .env for local development.
@@ -45,7 +45,7 @@ ALLOWED_HOSTS = [
 INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
-    'membership',
+    "membership.apps.MembershipConfig",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -87,6 +87,8 @@ TEMPLATES = [
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+sslmode = os.getenv("DB_SSLMODE", "")
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -95,9 +97,7 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD"),
         "HOST": os.getenv("DB_HOST"),
         "PORT": os.getenv("DB_PORT", "5432"),
-        "OPTIONS": {
-            "sslmode": "require",
-        },
+        "OPTIONS": ({"sslmode": sslmode} if sslmode else {}),
     }
 }
 
@@ -119,7 +119,23 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000"
+    ).split(",")
+    if origin.strip()
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CSRF_TRUSTED_ORIGINS",
+        ""
+    ).split(",")
+    if origin.strip()
+]
 
 
 # Internationalization
@@ -146,9 +162,8 @@ MEDIA_ROOT = BASE_DIR / "media"
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 if not DEBUG:
-    CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if os.getenv("CSRF_TRUSTED_ORIGINS") else []
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False
 
 SUBMIT_API_KEY = os.getenv("SUBMIT_API_KEY", "dev-key")
@@ -166,9 +181,44 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Food Investors Society <no-reply@localhost>")
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://bitcoder26.github.io/website-food-investors-society")
+DEFAULT_FROM_NAME = os.getenv("DEFAULT_FROM_NAME", "The Food Investors Society")
+DEFAULT_FROM_ADDRESS = os.getenv("DEFAULT_FROM_ADDRESS") or EMAIL_HOST_USER or "no-reply@localhost"
+DEFAULT_FROM_EMAIL = f"{DEFAULT_FROM_NAME} <{DEFAULT_FROM_ADDRESS}>"
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
+
+# --- Brevo transactional email -------------------------------------------------
+# Used for receipts/notifications so they send from an authenticated sender
+# (fixes the Gmail-SMTP spam placement). If BREVO_API_KEY is unset, the email
+# helpers transparently fall back to Django's send_mail (EMAIL_BACKEND above),
+# so nothing breaks before Brevo is wired up on the environment.
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
+BREVO_API_URL = os.getenv("BREVO_API_URL", "https://api.brevo.com/v3/smtp/email")
+# Sender must be a verified sender/domain in Brevo (Senders & IPs).
+BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL", "thefoodinvestorssociety@gmail.com")
+BREVO_SENDER_NAME = os.getenv("BREVO_SENDER_NAME", "The Food Investors Society")
+# Integer template IDs from Brevo > Transactional > Templates. 0 => not set.
+BREVO_DONATION_RECEIPT_TEMPLATE_ID = int(os.getenv("BREVO_DONATION_RECEIPT_TEMPLATE_ID", "0")) or None
+BREVO_APPLICATION_SUBMITTED_TEMPLATE_ID = int(os.getenv("BREVO_APPLICATION_SUBMITTED_TEMPLATE_ID", "0")) or None
+BREVO_PAYMENT_REQUESTED_TEMPLATE_ID = int(os.getenv("BREVO_PAYMENT_REQUESTED_TEMPLATE_ID", "0")) or None
+BREVO_MEMBERSHIP_PAYMENT_RECEIVED_TEMPLATE_ID = int(os.getenv("BREVO_MEMBERSHIP_PAYMENT_RECEIVED_TEMPLATE_ID", "0")) or None
+BREVO_MEMBERSHIP_ACTIVATED_TEMPLATE_ID = int(os.getenv("BREVO_MEMBERSHIP_ACTIVATED_TEMPLATE_ID", "0")) or None
+BREVO_NEWSLETTER_LIST_ID = int(os.getenv("BREVO_NEWSLETTER_LIST_ID", "2"))
+
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://fis-website-f3k.pages.dev")
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", SITE_URL)
+
+frontend_origin = urlsplit(FRONTEND_BASE_URL)
+
+if frontend_origin.scheme and frontend_origin.netloc:
+    frontend_origin_value = (
+        f"{frontend_origin.scheme}://{frontend_origin.netloc}"
+    )
+
+    if frontend_origin_value not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(frontend_origin_value)
+
+    if frontend_origin_value not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(frontend_origin_value)
 
 # Stripe
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
@@ -179,3 +229,4 @@ STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", f"{FRONTEND_BASE_URL}/payme
 STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", f"{FRONTEND_BASE_URL}/payment-cancelled.html?payment_id={{payment_id}}")
 STRIPE_CURRENCY = "gbp"
 
+THANKS_BASE = os.getenv("THANKS_BASE", f"{FRONTEND_BASE_URL}/thank-you.html")
