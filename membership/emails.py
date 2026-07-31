@@ -275,9 +275,15 @@ def send_membership_activated_email(
     marketing_consent: bool = False,
 ) -> None:
     label = "enrolment" if _is_non_member(plan_code=plan_code, enrolment_code=enrolment_code, plan_name=plan_name) else "membership"
+    is_volunteer = (plan_code or "").strip().upper() == "NM-VO"
+    template_id = (
+        settings.BREVO_VOLUNTEER_ACTIVATED_TEMPLATE_ID
+        if is_volunteer
+        else settings.BREVO_MEMBERSHIP_ACTIVATED_TEMPLATE_ID
+    )
 
     if _send_via_brevo(
-        template_id=settings.BREVO_MEMBERSHIP_ACTIVATED_TEMPLATE_ID,
+        template_id=template_id,
         to_email=to_email,
         params={
             "label": label,

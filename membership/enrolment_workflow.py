@@ -206,6 +206,7 @@ def approve_enrolment(*, enrolment: Enrolment, approved_by):
     return m
 
 def request_payment(*, enrolment: Enrolment, send_email: bool = True):
+    class_code = (getattr(enrolment.plan, "class_code", "") or "").strip().upper()
     type_code = (getattr(enrolment.plan, "type_code", "") or "").strip().upper()
     if type_code in {"SU", "VO"}:
         changed_fields = []
@@ -229,6 +230,7 @@ def request_payment(*, enrolment: Enrolment, send_email: bool = True):
                         to_email=to_email,
                         enrolment_code=enrolment.enrolment_code or str(enrolment.enrolment_id),
                         plan_name=enrolment.plan.name if enrolment.plan_id else None,
+                        plan_code=f"{class_code}-{type_code}" if class_code else None,
                         marketing_consent=bool(marketing_consent),
                     )
                     enrolment.membership_activated_email_sent_at = timezone.now()

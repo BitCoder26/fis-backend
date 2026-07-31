@@ -671,6 +671,7 @@ def create_payment_requests(modeladmin, request, queryset):
     activated_free_count = 0
 
     for enrolment in queryset:
+        class_code = (getattr(enrolment.plan, "class_code", "") or "").strip().upper()
         type_code = (getattr(enrolment.plan, "type_code", "") or "").strip().upper()
         if type_code in {"SU", "VO"}:
             changed_fields = []
@@ -695,6 +696,7 @@ def create_payment_requests(modeladmin, request, queryset):
                             to_email=to_email,
                             enrolment_code=enrolment.enrolment_code or str(enrolment.enrolment_id),
                             plan_name=enrolment.plan.name if enrolment.plan_id else None,
+                            plan_code=f"{class_code}-{type_code}" if class_code else None,
                             marketing_consent=bool(marketing_consent),
                         )
                         enrolment.membership_activated_email_sent_at = timezone.now()
