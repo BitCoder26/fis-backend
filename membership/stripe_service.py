@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import stripe
 from django.conf import settings
 from django.utils import timezone
@@ -41,7 +43,12 @@ def ensure_checkout_session(payment: Payment) -> Payment:
 
     enrolment_code = enrolment.enrolment_code or f"enrolment-{enrolment.enrolment_id}"
 
-    success_url = getattr(settings, "STRIPE_SUCCESS_URL", "") + f"?payment_id={payment.payment_id}"
+    success_extra = urlencode({
+        "amount": f"{(payment.amount_pence or 0) / 100:.2f}",
+        "currency": (payment.currency or "GBP").upper(),
+        "ref": enrolment_code,
+    })
+    success_url = getattr(settings, "STRIPE_SUCCESS_URL", "") + f"?payment_id={payment.payment_id}&{success_extra}"
     cancel_url = getattr(settings, "STRIPE_CANCEL_URL", "") + f"?payment_id={payment.payment_id}"
 
     session = stripe.checkout.Session.create(
